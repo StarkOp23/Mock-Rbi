@@ -1,0 +1,133 @@
+# =============================================================================
+# Mock RBI CMS Portal — docker-compose
+# Mirrors the Crest.ai stack: Postgres + FastAPI + React + Nginx
+# =============================================================================
+# Bring everything up:   docker compose up -d --build
+# Tear down:             docker compose down -v
+# Logs:                  docker compose logs -f backend
+# Reset DB:              docker compose down -v && docker compose up -d --build
+# =============================================================================
+#
+# IMPORTANT — networks
+# This compose file declares Crest's network as EXTERNAL so the mock RBI can
+# call into Crest, and Crest can call into the mock RBI, by container name.
+# The Crest stack must be running first (its network is created by it).
+# If your Crest project is in a folder named differently than 'crest-platform',
+# the network name may differ — find it with:
+#     docker network ls | findstr crestai
+# Then set CREST_NETWORK below to match.
+# =============================================================================
+
+services:
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: mock-rbi-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB:       ${POSTGRES_DB:-rbi_cms}
+      POSTGRES_USER:     ${POSTGRES_USER:-rbi_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-rbi_pass_demo_only}
+    volumes:
+      - rbi_pg_data_clean:/var/lib/postgresql/data
+    ports:
+      - "5433:5432"     # 5433 to avoid clash with bank-side Crest postgres on 5432
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - rbi_internal
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: mock-rbi-backend
+    # on-failure:3 — retry transient crashes a few times, but DON'T loop
+    # forever on a fatal startup error (like a stale-volume password mismatch).
+    # That way the operator can read the diagnostic message in `docker logs`
+    # instead of watching it scroll past as the container restarts.
+    restart: on-failure:3
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # DB connection passed as INDIVIDUAL fields rather than a pre-formed
+      # DATABASE_URL. The backend's config.py URL-encodes the password before
+      # building the asyncpg URL — this is the only way to guarantee that
+      # special characters in the password (@, :, /, #, $, space, etc.) reach
+      # asyncpg unchanged. If you bake the URL here in compose, those chars
+      # get silently mis-parsed and Postgres will reject the password even
+      # though both sides "look" the same.
+      POSTGRES_HOST:     "mock-rbi-postgres"
+      POSTGRES_PORT:     "5432"
+      POSTGRES_USER:     ${POSTGRES_USER:-rbi_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-rbi_pass_demo_only}
+      POSTGRES_DB:       ${POSTGRES_DB:-rbi_cms}
+      RBI_API_KEY:  ${RBI_API_KEY:-rbi_demo_token_change_me}
+      # Where the bank-side Crest agent listens. When both stacks share a network,
+      # use the Crest backend container name. When isolated, use host.docker.internal.
+      CREST_BANK_BASE_URL: ${CREST_BANK_BASE_URL:-http://crestai_backend:8000}
+      CREST_BANK_API_KEY:  ${CREST_BANK_API_KEY:-crest_test_sk_demo}
+      CREST_BANK_AGENT_ID: ${CREST_BANK_AGENT_ID:-grievance-io-agent}
+      LOG_LEVEL: INFO
+    ports:
+      - "8088:8000"     # 8088 to avoid clash with bank-side Crest backend on 8000
+    networks:
+      - rbi_internal
+      - crest_external
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: mock-rbi-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    environment:
+      # Vite reads this at build time; nginx injects at runtime
+      VITE_API_BASE_URL: /api/v1
+    networks:
+      - rbi_internal
+
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: mock-rbi-nginx
+    restart: unless-stopped
+    depends_on:
+      - frontend
+      - backend
+    ports:
+      - "8090:80"       # demo URL: http://localhost:8090
+    volumes:
+      # Mounted as .template — nginx:alpine runs envsubst on /etc/nginx/templates/*
+      # at container start and writes the result to /etc/nginx/conf.d/. This lets
+      # us substitute ${RBI_API_KEY} into the config without rebuilding the image.
+      - ./nginx/nginx.conf.template:/etc/nginx/templates/default.conf.template:ro
+    environment:
+      RBI_API_KEY: ${RBI_API_KEY:-rbi_demo_token_change_me}
+      # Tell envsubst which vars to actually replace. Without this it tries to
+      # substitute every $-variable in the template, including nginx's own ($host etc).
+      NGINX_ENVSUBST_TEMPLATE_DIR: /etc/nginx/templates
+      NGINX_ENVSUBST_OUTPUT_DIR:   /etc/nginx/conf.d
+      NGINX_ENVSUBST_FILTER:       "RBI_API_KEY"
+    networks:
+      - rbi_internal
+      - crest_external
+
+volumes:
+  rbi_pg_data_clean:
+
+networks:
+  # Internal network for mock RBI's own services (postgres, backend, frontend)
+  rbi_internal:
+    driver: bridge
+
+  # Crest's network — joined as EXTERNAL so we can reach crestai_backend by name.
+  # Override CREST_NETWORK in .env if the network is named differently.
+  crest_external:
+    name: ${CREST_NETWORK:-crest-platform_crestai_net}
+    external: true

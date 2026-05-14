@@ -1,0 +1,38 @@
+{
+  "name": "rbi-cms-portal-mock",
+  "type": "rest_api",
+  "description": "Mock RBI CMS Portal — receives forwarded complaints into the bank's Crest grievance agent and accepts the bank's resolution callback.",
+  "base_url": "http://localhost:8088",
+  "auth": {
+    "type": "bearer",
+    "credential_label": "RBI_CMS_TOKEN",
+    "header_name": "Authorization"
+  },
+  "default_headers": {
+    "Content-Type": "application/json",
+    "X-Caller": "crest-grievance-agent"
+  },
+  "endpoints_used": [
+    {
+      "purpose": "Bank posts back final resolution to RBI",
+      "method": "POST",
+      "path":   "/api/v1/responses",
+      "body_template": {
+        "complaint_reference_no": "{{ complaint_record.complaint_id }}",
+        "bank_code":              "HDFC",
+        "outcome":                "{{ llm_resolution.outcome }}",
+        "compensation_inr":       "{{ llm_resolution.compensation_inr }}",
+        "tat_days":               "{{ days_between(complaint_record.received_at, now()) }}",
+        "breached_30_day":        "{{ days_between(complaint_record.received_at, now()) > 30 }}",
+        "customer_letter":        "{{ llm_customer_letter.body_text }}",
+        "cited_clauses":          "{{ llm_resolution.cited_clauses }}",
+        "bank_run_id":            "{{ run_id }}"
+      }
+    }
+  ],
+  "notes": [
+    "Add this connection to the bank's Crest grievance agent as 'rbi-cms-callback'.",
+    "Wire it into Node 13 or Node 14 (Notification) so that the bank-side agent informs RBI when the customer letter is sent.",
+    "The bo-portal-api connection placeholder in the original cgio_agent_crest.json is the inbound side: that's what the Trigger receives when RBI POSTs to the Crest agent. This connection is the outbound side: bank → RBI."
+  ]
+}

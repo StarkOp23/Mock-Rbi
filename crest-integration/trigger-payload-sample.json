@@ -1,0 +1,13 @@
+{
+  "_comment": "This is the EXACT payload the Mock RBI CMS POSTs to the bank's Crest agent when RBI staff click 'Forward to Bank'. The shape matches the input_schema declared on the Trigger node in cgio_agent_crest.json.",
+
+  "input": {
+    "complaint_id":   "RBI-CMS-2026-04-00781",
+    "channel":        "cms_portal",
+    "customer_id":    "CUST-9912034",
+    "raw_text":       "ATM at Pimpri branch debited Rs 5,000 on 12-Apr-2026 but cash was not dispensed. I reported it the same day. It has been 18 days and no reversal has happened.",
+    "attachments":    [],
+    "received_at":    "2026-04-15T09:30:00+05:30",
+    "language":       "en"
+  }
+}

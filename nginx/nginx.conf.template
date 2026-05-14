@@ -1,0 +1,51 @@
+# =============================================================================
+# Mock RBI CMS Portal — nginx
+#
+# This file uses a placeholder ${RBI_API_KEY} that is substituted at container
+# start. Achieved by placing this file in /etc/nginx/templates/ via the bind
+# mount in docker-compose.yml — the official nginx:alpine image runs envsubst
+# on every *.template at boot, writing to /etc/nginx/conf.d/.
+# =============================================================================
+
+upstream rbi_backend  { server backend:8000; }
+upstream rbi_frontend { server frontend:80;  }
+
+server {
+    listen 80;
+    server_name _;
+
+    # Increase max body for large complaint texts
+    client_max_body_size 4m;
+
+    # ---- API proxy ----
+    # The browser UI doesn't carry a token. Nginx injects RBI_API_KEY from
+    # the docker-compose environment so the React app never sees the secret.
+    # External callers (a bank / Crest agent) provide their own Bearer token,
+    # which takes precedence.
+    location /api/v1/ {
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        set $auth $http_authorization;
+        if ($auth = "") {
+            set $auth "Bearer ${RBI_API_KEY}";
+        }
+        proxy_set_header Authorization $auth;
+
+        proxy_pass http://rbi_backend;
+    }
+
+    # Backend OpenAPI docs
+    location ~ ^/(docs|redoc|openapi.json) {
+        proxy_set_header Host $host;
+        proxy_pass http://rbi_backend;
+    }
+
+    # ---- Frontend SPA ----
+    location / {
+        proxy_set_header Host $host;
+        proxy_pass http://rbi_frontend;
+    }
+}
